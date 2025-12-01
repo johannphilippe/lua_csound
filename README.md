@@ -50,7 +50,7 @@ instr 1
 	aArgs[] init 2
 	aArgs[0] = phasor(p4) 
 	aArgs[1] = linseg(0, p3/2, 1, p3/2, 0) ; envelope
-	ares = lua_call "squarewave", aArgs
+	ares = lua_call("squarewave", aArgs)
 	outs ares*0.3, ares*0.3
 endin
 
@@ -138,33 +138,11 @@ cmake ..
 make
 ```
 
-# Alternative build
-
-Alternatively, the old make_script.sh can give you information about how to compile the plugin opcode. You will need to download and link with [LuaJIT](https://luajit.org/luajit.html). Once compiled, the opcode can be placed in the plugin directory of Csound.
-
-## MacOS 
-
-On MacOS, you will need to build luajit 2.1 with GC64 enabled, and MACOSX Target specified. 
-You can download sources here : [luajit](https://luajit.org/download.html). 
-Make sure `make` command is installed with `brew install make`.
-Replace the macOS version after MACOSX DEPLOYMENT TARGET and run command below. 
-
-`make XCFLAGS='-DLUAJIT_ENABLE_GC64' MACOSX_DEPLOYMENT_TARGET=11.1`
-
-
-## Windows
-
-To build for Windows, I recommand to use the make_win.bat script. You will need to build LuaJIT from source first. 
-I could build succesfully following these steps : 
-
-- Clone LuaJIT source from [LuaJIIT](https://github.com/LuaJIT/LuaJIT)
-- Open a Visual Studio x64 command prompt. 
-- Change directory to LuaJIT source folder, and enter `src`
-- Execute msvcbuild
-- Now move the libraries (*.lib, *.dll, *.exp) to somewhere in your Path. 
-- Change directory to lua_csound folder. 
-- Execute `make_win.bat` script. 
-- Copy libluacsound.lib and libluacsound.exp to your Csound plugin path. 
-
-
-
+## Windows MSVC 
+```
+cd lua_csound
+mkdir build 
+cd build 
+cmake .. 
+cmake --build . --config Release
+```
