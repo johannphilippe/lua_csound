@@ -5,6 +5,7 @@
 #include<plugin.h>
 #include<OpcodeBase.hpp>
 #include<mutex>
+#include"csdl.h"
 
 using namespace std;
 
@@ -379,94 +380,103 @@ struct LuaObj : csnd::Plugin<1,3> {
         csound::LockGuard criticalSection(csound->get_csound(), mtx);
 
         if(lua->checkStack(nsmps)==0) lua->garbageCollector(LUA_GCCOLLECT);
-        cout << "Init lua object" << endl;
         classname.allocate(csound, inargs.str_data(0).size);
         objname.allocate(csound, inargs.str_data(0).size + 10);
         ::memcpy(classname.data(), inargs.str_data(0).data, sizeof(char) * inargs.str_data(0).size);
 
-       cout << "classname found : " << classname.data() << endl;
        if(objList.find(classname.data()) == objList.end()) {
            objList[classname.data()] = 1;
        } else {
            objList[classname.data()] +=1;
        }
 
-       cout << "objlist ok" << endl;
        objnumber = objList[classname.data()];
-       cout << "objnumber ok  : " <<  objnumber << endl;
        string on = inargs.str_data(0).data + std::to_string(objnumber);
        ::memcpy(objname.data(), on.data(), sizeof(char) * on.size());
 
-       //cout << "objname initialized - > " << objname.data() << endl;
        lua->getGlobal(classname.data());
        lua->getField(-1,"new");
-       //std::cout << "get new field " << std::endl;
        lua->getGlobal(classname.data());
        lua->pcall(1,1);
-       //std::cout << "get global classname and pcall" << std::endl;
        lua->setGlobal(objname.data());
 
-       lua->getGlobal(classname.data());
-       lua->getField(-1, "init");
-  //     std::cout << "get init field " << std::endl;
        lua->getGlobal(objname.data());
+       lua->pushNumber(sr());
+       lua->setField(-2, "sr");
+       lua->pushNumber(ksmps());
+       lua->setField(-2, "ksmps");
 
-//       cout << "object initialized" << endl;
+       lua->getField(-1, "init");
+       lua->getGlobal(objname.data());
 
        int len = inargs.vector_data<MYFLT>(1).len();
        for(int i = 0; i < len; i++) {
            lua->pushNumber(inargs.vector_data<MYFLT>(1)[i]);
        }
-//       cout << "init args passed " << endl;
+       lua->remove(-(len + 3));
 
        lua->pcall(1 + len,0);
 
        lua->pop(1);
-//       cout << "last init pcall passed " << endl;
-       //std::cout << "Lua obj pcall" << std::endl;
         return OK;
     }
 
     int kperf() {
         csound::LockGuard criticalSection(csound->get_csound(), mtx);
-        //void *reference_keys_mutex = 0;
-        //csound::LockGuard criticalSection(csound->get_csound(), reference_keys_mutex);
-        //std::cout << "Lua obj kperf start" << std::endl;
 
-        lua->getGlobal(classname.data());
-        lua->getField(-1,"kperf");
         lua->getGlobal(objname.data());
+        lua->getField(-1,"kperf");
+        lua->pushValue(-2);
 
-        for(size_t i=0; i<inargs.vector_data<MYFLT>(2).len(); i++) {
+        const size_t len = inargs.vector_data<MYFLT>(2).len();
+        for(size_t i=0; i<len; i++) {
             lua->pushNumber(inargs.vector_data<MYFLT>(2)[i]);
         }
+
+        lua->remove(-(len + 3));
 
         lua->pcall(inargs.vector_data<MYFLT>(2).len() + 1, 1);
 
         outargs[0] = lua->toNumber(-1);
-        lua->pop(2);
+        lua->pop(1);
         return OK;
     }
 
     int aperf() {
         csound::LockGuard criticalSection(csound->get_csound(), mtx);
-        //void *reference_keys_mutex = 0;
-        //csound::LockGuard criticalSection(csound->get_csound(), reference_keys_mutex);
+
         ARRAYDAT *data = (ARRAYDAT *)inargs(2);
 
         int len = data->sizes[0];
-        lua->getGlobal(classname.data());
-        lua->getField(-1, "aperf");
+
         lua->getGlobal(objname.data());
+        lua->getField(-1, "aperf");
+        lua->pushValue(-2);
 
         for(int id = 0; id < len; id++) {
             lua->newTable();
-            for(size_t i = offset; i < nsmps; i++) {
+            for(size_t i = 0; i < nsmps; ++i) {
                 lua->pushNumber(data->data[i + id * (int)ksmps()]);
                 lua->rawSeti(-2, i + 1);
             }
         }
-        lua->pcall(len + 1, 1);
+
+        lua->remove(-(len + 3));
+        bool res = lua->pcall(len + 1, 1);
+        if(!res) 
+        {
+            std::cout <<  "Lua error " << lua->toString(-1) << std::endl;
+            lua->pop(2);
+            return NOTOK;
+        }
+
+        if(!lua->isTable(-1)) 
+        {
+            std::cout << "Lua - aperf output must be a table and is : " <<  lua->getType(-1) << std::endl;
+            lua->pop(2);
+            return NOTOK;
+        }
+
         for(size_t i = 0; i < nsmps; i++) {
             lua->rawGeti(-1, i + 1);
             lua_Number n = lua->toNumber(-1);
@@ -477,9 +487,215 @@ struct LuaObj : csnd::Plugin<1,3> {
     }
 };
 
+struct LuaObjArr : csnd::Plugin<1,4> {
+
+   int objnumber;
+
+   csnd::AuxMem<char> classname;
+   csnd::AuxMem<char> objname;
+   //try a destructor to see if I can remove object from memory, and remove its references in Lua.
+
+   int deinit() {
+        lua->pushNil();
+        lua->setGlobal(objname.data());
+        std::cout << "Delete object" << endl;
+       return OK;
+   }
+
+    int init() {
+        csound::LockGuard criticalSection(csound->get_csound(), mtx);
+        auto &ain = inargs.vector_data<csnd::AudioSig>(2);
+
+        out_cnt = (inargs[3] > 0) ? inargs[3] : 64;
+        // Problem
+        MYFLT * o_arg = outargs(0);
+        std::cout << "Out count "  << out_cnt << std::endl;
+        // This condition is not so cool
+        if( ain.len() > 0  && ain[0].GetNsmps() == nsmps)
+        {
+            std::cout << "Asig Version" << ain[0].GetNsmps() << std::endl;
+            csnd::Vector<csnd::AudioSig> &out = outargs.vector_data<csnd::AudioSig>(0);
+            out.init(csound, out_cnt);
+            for(size_t i = 0; i < out_cnt; ++i)
+            {
+                out[i] = csnd::AudioSig(this, o_arg, 0);
+            }
+        } 
+        else 
+        {
+            std::cout << "Ksig Version" << std::endl;
+            // K
+            csnd::Vector<MYFLT> &out = outargs.myfltvec_data(0);
+            out.init(csound, out_cnt);
+        }
+        // Check 
+
+        if(lua->checkStack(nsmps)==0) lua->garbageCollector(LUA_GCCOLLECT);
+        classname.allocate(csound, inargs.str_data(0).size);
+        objname.allocate(csound, inargs.str_data(0).size + 10);
+        ::memcpy(classname.data(), inargs.str_data(0).data, sizeof(char) * inargs.str_data(0).size);
+
+       if(objList.find(classname.data()) == objList.end()) {
+           objList[classname.data()] = 1;
+       } else {
+           objList[classname.data()] +=1;
+       }
+
+       objnumber = objList[classname.data()];
+       string on = inargs.str_data(0).data + std::to_string(objnumber);
+       ::memcpy(objname.data(), on.data(), sizeof(char) * on.size());
+
+       lua->getGlobal(classname.data());
+       lua->getField(-1,"new");
+       lua->getGlobal(classname.data());
+       lua->pcall(1,1);
+       lua->setGlobal(objname.data());
+
+       lua->getGlobal(objname.data());
+       lua->pushNumber(sr());
+       lua->setField(-2, "sr");
+       lua->pushNumber(ksmps());
+       lua->setField(-2, "ksmps");
+
+       lua->getField(-1, "init");
+       lua->pushValue(-2);
+
+       int len = inargs.vector_data<MYFLT>(1).len();
+       for(int i = 0; i < len; i++) {
+           lua->pushNumber(inargs.vector_data<MYFLT>(1)[i]);
+       }
+       lua->remove(-(len + 3));
+
+       lua->pcall(1 + len,0);
+
+       lua->pop(1);
+        return OK;
+    }
+
+    int kperf() {
+        csound::LockGuard criticalSection(csound->get_csound(), mtx);
+        
+        csnd::Vector<MYFLT> &out = outargs.myfltvec_data(0);
+
+        lua->getGlobal(objname.data());
+        lua->getField(-1,"kperf");
+
+        lua->pushValue(-2); // Push object 
+
+        size_t len = inargs.vector_data<MYFLT>(2).len();
+        for(size_t i=0; i< len; i++) {
+            lua->pushNumber(inargs.vector_data<MYFLT>(2)[i]);
+        }
+
+        lua->remove( -(3 + len) );
+
+        lua->pcall(len + 1, 1);
+
+        if(!lua->isTable(-1)) {
+            std::cout << "Error, Return value from Lua should be a table" << std::endl;
+            std::cout << "current type :: " << lua->getType(-1) << std::endl;
+            return NOTOK;
+        }
+
+        int nres = lua->rawLen(-1);
+        
+        if(nres > out_cnt) 
+        {
+            std::cout << "Error, too many outputs from Lua, increase the size of array with 4th arg" << std::endl;
+            return NOTOK;
+        } 
+
+        for(size_t i = 0; i < nres; ++i) 
+        {
+            lua->rawGeti(-1, i + 1);
+            out[i] = lua->toNumber(-1); //lua_tonumber(lua->getLuaState(), base + i + 1);
+            lua->pop(1);
+        }
+        lua->pop(1);
+        return OK;
+    }
+
+    int aperf() {
+        csound::LockGuard criticalSection(csound->get_csound(), mtx);
+        
+        ARRAYDAT *data = (ARRAYDAT *)inargs(2);
+
+        int len = data->sizes[0];
+        lua->getGlobal(objname.data());
+        lua->getField(-1, "aperf");
+        lua->pushValue(-2);
+
+        for(int id = 0; id < len; id++) {
+            std::cout << "about to create table" << std::endl;
+            lua->newTable();
+            std::cout << "ok table" << std::endl;
+            for(size_t i = offset; i < nsmps; i++) {
+                std::cout << "about to push" << std::endl;
+                lua->pushNumber(data->data[i + id * (int)ksmps()]);
+                std::cout << "pushed" << std::endl;
+                lua->rawSeti(-2, i + 1);
+                std::cout << "set" << std::endl;
+            }
+        }
+        lua->dump_stack();
+        lua->remove(-(len + 3));
+        lua->dump_stack();
+        bool res = lua->pcall(len + 1, 1);
+        lua->dump_stack();
+
+        if(!res) 
+        {
+            std::cout <<  "Lua error " << lua->toString(-1) << std::endl;
+            lua->pop(2);
+            return NOTOK;
+        }
+
+        if(!lua->isTable(-1)) 
+        {
+            std::cout << "Lua - aperf output must be a table and is : " <<  lua->getType(-1) << std::endl;
+            lua->pop(2);
+            return NOTOK;
+        }
+        
+        lua->dump_stack();
+        int nres = lua->rawLen(-1);
+
+        std::cout << "nres : " << nres << std::endl;
+        if(nres > out_cnt) 
+        {
+            std::cout << "Error, too many outputs from Lua, increase the size of array with 4th arg" << std::endl;
+            return NOTOK;
+        } 
+
+        csnd::Vector<csnd::AudioSig> &out = outargs.vector_data<csnd::AudioSig>(0);
+        for(size_t i = 0; i < nres; ++i )
+        {
+            std::cout << "iterating outs : " << i << std::endl;
+            lua->rawGeti(-1, i + 1);
+            std::cout << "\t : getting out[i]" << std::endl;
+            csnd::AudioSig &chan = out[i]; //outargs.vector_data<csnd::AudioSig>(0)[i];
+            std::cout << "\t : got out[i] " << chan.GetNsmps() << std::endl;
+            for(size_t n = 0; n < nsmps; ++n)
+            {
+                lua->rawGeti(-1, n + 1);
+                double smp = lua->toNumber(-1);
+                std::cout << "Lua retrieved" << std::endl;
+                chan[n] = smp;
+                std::cout << "Set to out chan" << std::endl;
+            }
+            //lua->pop(1);
+        }
+        lua->pop(1);
+        return OK;
+    }
+
+    size_t out_cnt;
+};
+
 #include<modload.h>
 
 void csnd::on_load(Csound *csound) {
+    std::cout << "Loading lua module " << std::endl;
     //init Lua state _ can only be called once
   csnd::plugin<LuaInit>(csound, "lua_init", "" , "P",  csnd::thread::i);
 
@@ -515,6 +731,10 @@ void csnd::on_load(Csound *csound) {
   csnd::plugin<LuaObj>(csound, "lua_obj", "k", "Si[]k[]", csnd::thread::ik, 1);
   csnd::plugin<LuaObj>(csound, "lua_obj", "a", "Si[]a[]", csnd::thread::ia, 1);
   // missing another opcode with audio output and control input (and another for both inputs ?)
+
+  // Same obj with array return 
+  csnd::plugin<LuaObjArr>(csound, "lua_obj_arr", "k[]", "Si[]k[]o", csnd::thread::ik, 1);
+  csnd::plugin<LuaObjArr>(csound, "lua_obj_arr", "a[]", "Si[]a[]o", csnd::thread::ia, 1);
 
   csnd::plugin<LuaPushGlobalArray>(csound, "lua_push_array","", "Si[]", csnd::thread::i);
   csnd::plugin<LuaPushGlobalString>(csound, "lua_push_string", "","SS",csnd::thread::i);

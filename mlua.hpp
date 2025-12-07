@@ -133,6 +133,7 @@ public:
     void pushNumber(double val) {lua_pushnumber(lua,val);}
     void pushBool(bool val) {lua_pushboolean(lua,val);}
     void pushNil() {lua_pushnil(lua);}
+    void pushValue(int idx) {lua_pushvalue(lua, idx);}
 
     template<typename T>
     void pushLightUserData(T *ptr) {
@@ -147,6 +148,7 @@ public:
 
     bool isString(int idx) {return (lua_isstring(lua,idx) == 1);}
     bool isNumber(int idx) {return (lua_isnumber(lua,idx) == 1);}
+    bool isTable(int idx) {return lua_istable(lua, idx) == 1;}
     int getType(int idx) {return lua_type(lua,idx);}
 
     std::string toString(int index) {return std::string(lua_tostring(lua, index));}
@@ -168,6 +170,7 @@ public:
     void getTable(int idx) {lua_gettable(lua,idx);}
 
 
+    int rawLen(int idx) { return lua_objlen(lua, idx);}
     void rawSeti(int stack_index, int array_index ) {lua_rawseti(lua, stack_index, array_index);}
     void rawGeti(int stack_index, int array_index) {return lua_rawgeti(lua, stack_index,array_index);}
 
@@ -181,6 +184,7 @@ public:
 
 
     void pop(int number) {lua_pop(lua,number);}
+    void remove(int idx) {lua_remove(lua, idx);}
 
     lua_State *getLuaState() {return lua;}
 
@@ -211,6 +215,49 @@ public:
            }
 
     }
+
+
+
+    void dump_stack() {
+        int top = lua_gettop(lua);
+        printf("Lua stack (top=%d):\n", top);
+        for (int i = 1; i <= top; i++) {
+            int t = lua_type(lua, i);
+            switch (t) {
+                case LUA_TNIL:
+                    printf("  [%d] nil\n", i);
+                    break;
+                case LUA_TBOOLEAN:
+                    printf("  [%d] boolean: %s\n", i, lua_toboolean(lua, i) ? "true" : "false");
+                    break;
+                case LUA_TNUMBER:
+                    printf("  [%d] number: %g\n", i, lua_tonumber(lua, i));
+                    break;
+                case LUA_TSTRING:
+                    printf("  [%d] string: '%s'\n", i, lua_tostring(lua, i));
+                    break;
+                case LUA_TTABLE:
+                    printf("  [%d] table\n", i);
+                    break;
+                case LUA_TFUNCTION:
+                    printf("  [%d] function\n", i);
+                    break;
+                case LUA_TUSERDATA:
+                    printf("  [%d] userdata\n", i);
+                    break;
+                case LUA_TLIGHTUSERDATA:
+                    printf("  [%d] lightuserdata\n", i);
+                    break;
+                case LUA_TTHREAD:
+                    printf("  [%d] thread\n", i);
+                    break;
+                default:
+                    printf("  [%d] unknown\n", i);
+                    break;
+            }
+        }
+    }
+
 private:
 
 
