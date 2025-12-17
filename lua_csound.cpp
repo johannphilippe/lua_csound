@@ -491,8 +491,10 @@ struct LuaObjArr : csnd::Plugin<1,4> {
 
    int objnumber;
 
-   csnd::AuxMem<char> classname;
-   csnd::AuxMem<char> objname;
+    csnd::AuxMem<char> classname;
+    csnd::AuxMem<char> objname;
+    csnd::AuxMem<MYFLT> audio_mem;
+    size_t out_cnt;
    //try a destructor to see if I can remove object from memory, and remove its references in Lua.
 
    int deinit() {
@@ -506,24 +508,27 @@ struct LuaObjArr : csnd::Plugin<1,4> {
         csound::LockGuard criticalSection(csound->get_csound(), mtx);
         auto &ain = inargs.vector_data<csnd::AudioSig>(2);
 
-        out_cnt = (inargs[3] > 0) ? inargs[3] : 64;
+        out_cnt = (inargs[3] > 0) ? inargs[3] : 16;
         // Problem
         MYFLT * o_arg = outargs(0);
-        std::cout << "Out count "  << out_cnt << std::endl;
-        // This condition is not so cool
-        if( ain.len() > 0  && ain[0].GetNsmps() == nsmps)
+
+        // This condition is not so cool > Checking if it is audio
+        if( ain.len() > 0  && ain[0].GetNsmps() == nsmps) // Aperf
         {
-            std::cout << "Asig Version" << ain[0].GetNsmps() << std::endl;
             csnd::Vector<csnd::AudioSig> &out = outargs.vector_data<csnd::AudioSig>(0);
             out.init(csound, out_cnt);
+            audio_mem.allocate(csound, ksmps() * out_cnt);
+            MYFLT* ptr = audio_mem.data();
             for(size_t i = 0; i < out_cnt; ++i)
             {
-                out[i] = csnd::AudioSig(this, o_arg, 0);
+                size_t mem_idx = i * ain[0].GetNsmps();
+                auto it = out[i].begin();
+                //out[i] = csnd::AudioSig(this, ptr, true);
+                ptr += size_t(ksmps());
             }
         } 
-        else 
+        else  // Kperf 
         {
-            std::cout << "Ksig Version" << std::endl;
             // K
             csnd::Vector<MYFLT> &out = outargs.myfltvec_data(0);
             out.init(csound, out_cnt);
@@ -619,6 +624,7 @@ struct LuaObjArr : csnd::Plugin<1,4> {
         csound::LockGuard criticalSection(csound->get_csound(), mtx);
         
         ARRAYDAT *data = (ARRAYDAT *)inargs(2);
+        ARRAYDAT *out = (ARRAYDAT *)outargs(0);
 
         int len = data->sizes[0];
         lua->getGlobal(objname.data());
@@ -626,22 +632,17 @@ struct LuaObjArr : csnd::Plugin<1,4> {
         lua->pushValue(-2);
 
         for(int id = 0; id < len; id++) {
-            std::cout << "about to create table" << std::endl;
             lua->newTable();
-            std::cout << "ok table" << std::endl;
             for(size_t i = offset; i < nsmps; i++) {
-                std::cout << "about to push" << std::endl;
                 lua->pushNumber(data->data[i + id * (int)ksmps()]);
-                std::cout << "pushed" << std::endl;
                 lua->rawSeti(-2, i + 1);
-                std::cout << "set" << std::endl;
             }
         }
-        lua->dump_stack();
+        //lua->dump_stack();
         lua->remove(-(len + 3));
-        lua->dump_stack();
+        //lua->dump_stack();
         bool res = lua->pcall(len + 1, 1);
-        lua->dump_stack();
+        //lua->dump_stack();
 
         if(!res) 
         {
@@ -657,39 +658,37 @@ struct LuaObjArr : csnd::Plugin<1,4> {
             return NOTOK;
         }
         
-        lua->dump_stack();
+        //lua->dump_stack();
         int nres = lua->rawLen(-1);
 
-        std::cout << "nres : " << nres << std::endl;
-        if(nres > out_cnt) 
+        const size_t out_ch = outargs.vector_data<csnd::AudioSig>(0).len();
+
+        if(nres > out_ch) 
         {
-            std::cout << "Error, too many outputs from Lua, increase the size of array with 4th arg" << std::endl;
+            std::cout << "Error, too many outputs from Lua, increase the size of array with 4th argument" << std::endl;
             return NOTOK;
         } 
 
-        csnd::Vector<csnd::AudioSig> &out = outargs.vector_data<csnd::AudioSig>(0);
-        for(size_t i = 0; i < nres; ++i )
+        for(size_t ch = 0; ch < nres; ++ch )
         {
-            std::cout << "iterating outs : " << i << std::endl;
-            lua->rawGeti(-1, i + 1);
-            std::cout << "\t : getting out[i]" << std::endl;
-            csnd::AudioSig &chan = out[i]; //outargs.vector_data<csnd::AudioSig>(0)[i];
-            std::cout << "\t : got out[i] " << chan.GetNsmps() << std::endl;
+            lua->rawGeti(-1, ch + 1);
+
             for(size_t n = 0; n < nsmps; ++n)
             {
+               
                 lua->rawGeti(-1, n + 1);
                 double smp = lua->toNumber(-1);
-                std::cout << "Lua retrieved" << std::endl;
-                chan[n] = smp;
-                std::cout << "Set to out chan" << std::endl;
+                lua->pop(1);
+                
+                out->data[n + ch * (int)ksmps()] = smp;
             }
-            //lua->pop(1);
+            lua->pop(1);
         }
-        lua->pop(1);
+        int top = lua->getTop();
+        lua->pop(top);
         return OK;
     }
 
-    size_t out_cnt;
 };
 
 #include<modload.h>

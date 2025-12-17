@@ -186,6 +186,8 @@ public:
     void pop(int number) {lua_pop(lua,number);}
     void remove(int idx) {lua_remove(lua, idx);}
 
+    int getTop() { return lua_gettop(lua); }
+
     lua_State *getLuaState() {return lua;}
 
     //private methods

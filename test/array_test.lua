@@ -13,6 +13,9 @@ end
 function myclass:init(nothing) -- then the init function allows to store and initialize members
     self.kout = {0, 0}
     self.aout = {{}, {}}
+    -- Trick to pre-initialize an array of size ksmps
+    self.aout[1][self.ksmps] = 0.0
+    self.aout[2][self.ksmps] = 0.0
     self.phase = 0
 end
 
@@ -34,7 +37,7 @@ function myclass:aperf(freq) -- if opcode is running at k-rate, it will call kpe
         self.freq = 2 * math.pi * freq[i]
         self.phase_incr = self.freq / (self.sr)
         self.aout[1][i] = math.sin(self.phase)
-        self.aout[2][i] = math.cos(self.phase)
+        self.aout[2][i] = math.cos(self.phase * 2)
         self.phase = self.phase + self.phase_incr
         if(self.phase > 2.0 * math.pi) then 
             self.phase = self.phase - 2.0 * math.pi
